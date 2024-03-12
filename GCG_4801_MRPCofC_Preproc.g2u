@@ -1,0 +1,605 @@
+Program.Sub.Preflight.Start
+V.Global.sRptId.Declare(String)
+V.Global.sOrderNo.Declare(String)
+V.Global.sOrderLine.Declare(String)
+V.Global.sPart.Declare(String)
+V.Global.sLot.Declare(String)
+V.Global.sBin.Declare(String)
+V.Global.sHeat.Declare(String)
+V.Global.sSerial.Declare(String)
+V.Global.sBOM.Declare(String)
+v.Global.sMap.Declare(String)
+V.Global.sSource.Declare(String)
+v.Global.sLMO.Declare(String)
+v.Global.sRev.Declare(String)
+v.Global.sMaterialSpec.Declare(String)
+v.Global.sProcessSpec.Declare(String)
+v.Global.sSupplierProcessor.Declare(String)
+v.Global.sDocument.Declare(String)
+V.Global.sLotKey.Declare(String)
+v.Global.bParent.Declare(Boolean)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+
+F.ODBC.Connection!Con.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+'the next 2 rows were added strictly for testing
+'Function.Intrinsic.Debug.InvokeDebugger
+'Function.Intrinsic.Debug.Stop
+'------------------------------------------these 2 lines for testing only-------------------
+'f.Intrinsic.Control.CallSub(certs_map)
+'f.Intrinsic.Control.CallSub(loadBOM)
+
+'CHECK DB check if dependent table exists.  If not, create it, then attempt to create indexes.
+'Function.Intrinsic.Control.CallSub(checkdb)
+
+'build the datatable and mapping
+f.Intrinsic.Control.CallSub(certs_map)
+
+'USE TERMINAL NUMBER TO GET ORDER/LINE FROM V_BI_PACKING_LIST
+Function.Intrinsic.Control.CallSub(loadshipmentdata)
+
+'CALL REPORT/LAUNCH BI AFTER THIS PREPROC RUNS
+'Report ID 114
+Function.Intrinsic.Control.CallSub(loadbi)
+
+F.ODBC.Connection!Con.Close
+Program.Sub.Main.End
+
+Program.Sub.CheckDB.Start
+V.Local.i.Declare(Long)
+V.Local.sError.Declare(String)
+V.Local.bExists.Declare(Boolean)
+V.Local.sMessage.Declare(String)
+V.Local.sPath.Declare(String)
+V.Local.sSQL.Declare(String)
+
+Function.Intrinsic.String.Build("{0}\{1}",V.Ambient.ScriptPath,"GCG_4801_MRPCOFC_CheckDB.sql",V.Local.sPath)
+Function.Intrinsic.File.File2String(V.Local.sPath,V.Local.sSQL)
+Function.Intrinsic.String.Split(V.Local.sSQL,";",V.Local.sSQL)
+
+
+F.Intrinsic.Control.SetErrorHandler("CheckDB_Err")
+F.ODBC.Connection!Con.TableExists("GCG_4801_MRPCOFC",V.Local.bExists)
+Function.Intrinsic.Control.If(V.Local.bExists,=,False)
+	Function.Intrinsic.UI.InvokeWaitDialog("Creating database dependencies...","Subroutine: CheckDB")
+	F.Intrinsic.Control.For(V.Local.i,V.Local.sSQL.LBound,V.Local.sSQL.UBound,1)
+		Function.Intrinsic.Control.If(V.Local.sSQL(V.Local.i),<>,"")
+			Function.Intrinsic.String.Build("Performing instruction {0} of {1}...",V.Local.i,V.Local.sSQL.UBound,V.Local.sMessage)
+			Function.Intrinsic.UI.ChangeWaitStatus(V.Local.sMessage,V.Local.i,V.Local.sSQL.LBound,V.Local.sSQL.UBound)
+			F.Intrinsic.Control.ClearErrors
+			F.ODBC.Connection!Con.Execute(V.Local.sSQL(V.Local.i))
+			F.Intrinsic.Control.Label("Continue")
+		Function.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.Next(V.Local.i)
+	Function.Intrinsic.UI.CloseWaitDialog
+Function.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("CheckDB_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_4801_MRPCOFC_Preproc.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+Function.Intrinsic.Control.GoTo("Continue")
+
+Program.Sub.CheckDB.End
+
+Program.Sub.LoadShipmentData.Start
+V.Local.sSQL.Declare(String)
+V.Local.sRet.Declare(String)
+v.Local.iLot.Declare(Long)
+v.Local.sLog.Declare(String)
+
+'Cleaning up old records so they don't taint our efforts...
+Function.Intrinsic.String.Build("DELETE FROM GCG_4801_MRPCOFC WHERE TERMINAL='{0}'",V.Caller.Terminal,V.Local.sSQL)
+Function.ODBC.Connection!Con.Execute(V.Local.sSQL)
+
+Function.Intrinsic.String.Build("select ohl.LOT from V_BI_PACKING_LIST pl left outer join V_ORDER_HIST_LOT ohl ON pl.ORDER_NO=ohl.ORDER_NO and pl.ORDER_SUFFIX=ohl.ORDER_SUFFIX and pl.RECORD_NO=ohl.ORDER_LINE where line_type='L' and OHL.LOT > '' and TERMINAL='{0}'",V.Caller.Terminal,V.Local.sSQL)
+'F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSQL,V.Local.sRet)
+f.Data.DataTable.CreateFromSQL("LOTS","CON",V.Local.sSQL,True)
+
+'loop through the lots that were returned.
+f.Intrinsic.Control.For(v.Local.iLot,0,v.DataTable.LOTS.RowCount--,1)
+	v.Global.sLotKey.Set(v.DataTable.LOTS(v.Local.iLot).LOT!FIELDVALTRIM)
+	F.Intrinsic.String.Split(V.Global.sLotKey,"-",V.Local.sRet)
+		'write to log
+		f.Intrinsic.String.Build("shipped lot {0} moving in to details",V.Global.sLotKey,v.Local.sLog)
+		f.Intrinsic.Debug.SetLA(v.Local.sLog)
+	Function.Intrinsic.Control.CallSub(load_parent,"sJob",V.Local.sRet(0),"sSuffix",V.Local.sRet(1))
+F.Intrinsic.Control.Next(V.Local.iLot)
+
+'adding the terminal ID for the report parameters
+F.Data.DataTable.AddColumn("CERTS","TERMINAL","STRING",V.Caller.Terminal)
+
+f.Data.DataTable.SaveToDB("CERTS","CON","GCG_4801_MRPCOFC","",128,"KEY1@!@KEY1*!*KEY2@!@KEY2*!*PART@!@PART*!*REV@!@REV*!*LOT_M@!@MATERIAL_SPEC*!*PROC_SPEC@!@PROCESS_SPEC*!*SUP_PROC@!@SUPPLIER_PROCESSOR*!*DOCUMENT@!@LOT_BATCH_CURE*!*TERMINAL@!@TERMINAL*!*LOT@!@LOT")
+
+
+Program.Sub.LoadShipmentData.End
+
+Program.Sub.load_parent.Start
+F.Intrinsic.Control.SetErrorHandler("load_parent_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sSQL.Declare(String)
+V.Local.sSQL1.Declare(String)
+V.Local.sRet.Declare(String)
+V.Local.sPath.Declare(String)
+V.Local.i.Declare(Long)
+v.Local.iCount.Declare(Long)
+v.Local.sQuery.Declare(String)
+v.Local.sRow.Declare(String)
+V.Local.sJob.Declare(String)
+v.Local.sSuffix.Declare(String)
+v.Local.bProcessed.Declare(Boolean)
+v.Local.iRec.Declare(Long)
+v.Local.iRow.Declare(Long)
+V.Local.iChild.Declare(Long)
+v.Local.sLog.Declare(String)
+
+'query the parent part information
+f.Intrinsic.String.Build("select distinct left(it.part,17) PartNum, right(it.part,3) PartRev, im.code_source, it.lot Lot_M, it.user_FIELD_1, it.user_FIELD_2 User2_MO, it.user_FIELD_3 User3_MO, it.user_field_6 User6_M, ie.user1, ie.user2, ie.user3, ie.user4, ie.user5, ie.user6, ie.user7, ie.user8, ie.user9, ie.user10 from v_item_master it left outer join v_inventory_mst2 im on it.part=im.part and it.location=im.location left outer join inv_extra ie on left(it.part,17)=ie.part and right(it.part,3)=ie.rev and it.location=ie.location where it.lot = '{0}-{1}'",v.Args.sJob,v.Args.sSuffix,v.Local.sSql)
+
+'creating a list of part/lot/heat/user field data to sift through and organize
+F.Intrinsic.Control.If(V.DataTable.ITEMS.Exists,"=",True)
+	'if this datatable already exists, it means we are looping through this sub again
+	f.Data.DataTable.Close("ITEMS")
+F.Intrinsic.Control.EndIf
+f.Data.DataTable.CreateFromSQL("ITEMS","CON",V.Local.sSQL,True)
+f.Data.DataTable.AddExpressionColumn("ITEMS","USERS","STRING","TRIM(USER1) + TRIM(USER2) + TRIM(USER3) + TRIM(USER4) + TRIM(USER5) + TRIM(USER6) + TRIM(USER7) + TRIM(USER8) + TRIM(USER9) + TRIM(USER10)")
+
+F.Intrinsic.Control.For(V.Local.iCount,0,V.DataTable.ITEMS.RowCount--,1)
+	v.global.sPart.Set(v.DataTable.ITEMS(v.Local.iCount).PartNum!FIELDVALTRIM)
+	v.global.sRev.Set(v.DataTable.ITEMS(v.Local.iCount).PartRev!FIELDVALTRIM)
+	v.global.sLMO.Set("")
+	v.global.sSource.Set(v.DataTable.ITEMS(v.Local.iCount).code_source!FIELDVALTRIM)
+	v.Global.sMaterialSpec.Set(v.DataTable.ITEMS(v.Local.iCount).Lot_M!FIELDVALTRIM)
+	v.global.sProcessSpec.Set("")
+	v.global.sSupplierProcessor.Set("Prompton Tool, Inc.")
+	v.global.sDocument.Set("")
+	'this is checking the same row to see if we have values in the ie.userX fields.
+	F.Intrinsic.Control.If(V.DataTable.ITEMS(V.Local.iCOUNT).USERS!FIELDVALTRIM,">","")
+		f.Intrinsic.Control.CallSub(user_fields,"COUNT",v.Local.iCount,"ROW",V.Local.iRow,"CHILD",V.Local.iChild)
+	F.Intrinsic.Control.EndIf	
+'	f.Intrinsic.Control.If(v.Global.sProcessSpec.Trim,>,"")
+'		v.Local.bProcessed.Set(True)
+'		f.Data.DataTable.AddRowByMap("CERTS",V.Global.sMap,v.Local.iCount,0,v.global.sSource,"M",v.global.sPart,v.global.sRev,v.Global.sMaterialSpec,v.global.sProcessSpec,v.global.sSupplierProcessor,v.global.sDocument,v.Local.bProcessed,V.Global.sLotKey)
+'	f.Intrinsic.Control.EndIf
+f.Intrinsic.Control.Next(v.Local.iCount)
+f.Intrinsic.Math.Sub(v.Local.iCount,1,v.Local.iCount)
+Function.Intrinsic.Control.CallSub(loadbom,"sJob",V.Args.sJob,"sSuffix",V.Args.sSuffix,"ROW",V.Local.iCount,"CHILD",0)
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("load_parent_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: Project",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.Debug.SetLA(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+
+Program.Sub.load_parent.End
+
+Program.Sub.LoadBOM.Start
+F.Intrinsic.Control.SetErrorHandler("Sub_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sSQL.Declare(String)
+V.Local.sSQL1.Declare(String)
+V.Local.sRet.Declare(String)
+V.Local.sPath.Declare(String)
+V.Local.i.Declare(Long)
+v.Local.iCount.Declare(Long)
+v.Local.sQuery.Declare(String)
+v.Local.sRow.Declare(String)
+V.Local.sJob.Declare(String)
+v.Local.sSuffix.Declare(String)
+v.Local.bProcessed.Declare(Boolean)
+v.Local.iRec.Declare(Long)
+v.Local.iRow.Declare(Long)
+V.Local.iChild.Declare(Long)
+v.Local.sLog.Declare(String)
+V.Local.sPart.Declare(String)
+V.Local.sTemp.Declare(String)
+v.Local.sSeq.Declare(String)
+
+'setting the child record count
+v.Local.iChild.Set(v.Args.CHILD)
+V.Local.iRow.Set(V.Args.ROW)
+'adding in the values for the parent part first.
+'V.Local.sJob.Set("002828")
+'V.Local.sSuffix.Set("000")
+
+'write the base query as a variable so we can use it again
+v.Local.sQuery.Set("select distinct left(ih.part,17) PartNum, right(ih.part,3) PartRev, jo.lmo, im.code_source, ih.sequence, ih.lot Lot_M, it.user_FIELD_1, it.user_FIELD_2 User2_MO, it.user_FIELD_3 User3_MO, if(jo.lmo='M',it.user_FIELD_6,'') User6_M, if(jo.lmo='O',it.user_FIELD_6,'') User6_O, if(jo.lmo='O',it.user_FIELD_8,'') User8_O, if(jo.lmo='O',it.user_FIELD_9,'') User9_O, ie.user1, ie.user2, ie.user3, ie.user4, ie.user5, ie.user6, ie.user7, ie.user8, ie.user9, ie.user10 from v_item_history ih left outer join v_inventory_mst2 im on ih.part=im.part and ih.location=im.location left outer join v_item_master it on ih.part = it.part and ih.location = it.location and ih.lot = it.lot left outer join inv_extra ie on left(ih.part,17)=ie.part and right(ih.part,3)=ie.rev and ih.location=ie.location left outer join v_job_operations jo on ih.job=jo.job and ih.suffix=jo.suffix and ih.sequence=jo.seq and jo.lmo in ('M','O') where ih.job='{0}' and ih.suffix='{1}' and seq<>'995000' ORDER BY LMO DESC")
+'Function.Intrinsic.String.Build(V.Local.sQuery,V.Args.sJob,V.Args.sSuffix,V.Local.sSQL)
+'below line only added for testing - the above line is the normal line to use
+Function.Intrinsic.String.Build(V.Local.sQuery,V.Args.sJOB,V.Args.sSuffix,V.Local.sSQL)
+
+'creating a list of part/lot/heat/user field data to sift through and organize
+F.Intrinsic.Control.If(V.DataTable.ITEMS.Exists,"=",True)
+	'if this datatable already exists, it means we are looping through this sub again, or again, or again....
+	f.Data.DataTable.Close("ITEMS")
+F.Intrinsic.Control.EndIf
+f.Data.DataTable.CreateFromSQL("ITEMS","CON",V.Local.sSQL,True)
+f.Data.DataTable.AddExpressionColumn("ITEMS","USERS","STRING","TRIM(USER1) + TRIM(USER2) + TRIM(USER3) + TRIM(USER4) + TRIM(USER5) + TRIM(USER6) + TRIM(USER7) + TRIM(USER8) + TRIM(USER9) + TRIM(USER10)")
+f.Data.DataTable.AddExpressionColumn("ITEMS","PURCH","STRING","USER2_MO + USER3_MO + USER6_O + USER8_O")
+f.Intrinsic.Debug.SetLA("expression column added to items table")
+
+'write the records we want (these are materials and outside services from the parent work order)
+f.Intrinsic.Debug.SetLA("looping through the primary records")
+F.Intrinsic.Control.For(V.Local.iCount,0,V.DataTable.ITEMS.RowCount--,1)
+	v.global.sPart.Set(v.DataTable.ITEMS(v.Local.iCount).PartNum!FIELDVALTRIM)
+	v.global.sRev.Set(v.DataTable.ITEMS(v.Local.iCount).PartRev!FIELDVALTRIM)
+	v.global.sLMO.Set(V.DataTable.ITEMS(V.Local.iCount).LMO!FIELDVALTRIM)
+	v.global.sSource.Set(v.DataTable.ITEMS(v.Local.iCount).code_source!FIELDVALTRIM)
+	v.Local.sSeq.Set(v.DataTable.ITEMS(V.Local.iCount).SEQUENCE!FIELDVALTRIM)
+	F.Intrinsic.Control.If(v.global.sLMO,"=","O")
+		
+		f.Intrinsic.debug.SetLA("process parent outside service")
+		f.Intrinsic.String.Build("select distinct left(ih.part,17) PartNum, right(ih.part,3) PartRev, jo.lmo, im.code_source, ih.lot Lot_M, iu.usr_FIELD_1, iu.usr_FIELD_2 User2_MO, iu.usr_FIELD_3 User3_MO, if(jo.lmo='M',iu.usr_FIELD_6,'') User6_M, if(jo.lmo='O',iu.usr_FIELD_6,'') User6_O, if(jo.lmo='O',iu.usr_FIELD_8,'') User8_O, if(jo.lmo='O',iu.usr_FIELD_9,'') User9_O, ie.user1, ie.user2, ie.user3, ie.user4, ie.user5, ie.user6, ie.user7, ie.user8, ie.user9, ie.user10 from v_item_history ih left outer join v_inventory_mst2 im on ih.part=im.part and ih.location=im.location left outer join v_item_hist_usr iu on ih.part = iu.part and ih.location = iu.locn and ih.date_history = iu.key_date and ih.time_item_history = iu.key_time left outer join inv_extra ie on left(ih.part,17)=ie.part and right(ih.part,3)=ie.rev and ih.location=ie.location left outer join v_job_operations jo on ih.job=jo.job and ih.suffix=jo.suffix and ih.sequence=jo.seq and jo.lmo in ('O') where ih.part = '{0}{1}' and ih.job='{2}' and ih.suffix='{3}' and seq ='{4}' ORDER BY LMO DESC",v.Global.sPart,v.Global.sRev,v.Args.sJOB,v.Args.sSuffix,V.Local.sSeq,v.Local.sSQL)
+		f.ODBC.Connection!Con.executeandreturn(v.Local.sSQL,v.Local.sRet)
+		f.Intrinsic.String.Split(v.Local.sRet,"#$#",v.Local.sRet)
+		f.Intrinsic.Control.For(v.Local.i,0,v.Local.sRet.UBound,1)		
+			f.Intrinsic.String.Split(v.Local.sRet(v.Local.i),"*!*",v.Local.sTemp)			
+			v.Global.sMaterialSpec.Set("")
+			f.Intrinsic.String.Build("{0} {1} {2}",v.Local.sTemp(9),v.Local.sTemp(10),v.Local.sTemp(11),v.global.sProcessSpec)
+			v.global.sSupplierProcessor.Set(v.Local.sTemp(6))
+			v.global.sDocument.Set(v.Local.sTemp(7))
+			F.Intrinsic.Math.Add(V.Local.iRow,1,V.Local.iRow)
+			f.Data.DataTable.AddRowByMap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,v.Global.sMaterialSpec,v.global.sProcessSpec,v.global.sSupplierProcessor,v.global.sDocument,v.Local.bProcessed,V.Global.sLotKey)
+		f.Intrinsic.Control.Next(v.Local.i)
+	F.Intrinsic.Control.ElseIf(v.global.sLMO,"=","M")
+		f.Intrinsic.Debug.SetLA("process material")
+			Function.Intrinsic.Control.If(v.Global.sSource,"=","P")
+				F.Intrinsic.Control.If(V.DataTable.ITEMS(V.Local.iCount).PURCH!FIELDVALTRIM,">","")
+					f.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER6_M!FIELDVALTRIM,">","")
+						v.Global.sMaterialSpec.Set(V.DataTable.ITEMS(V.Local.iCount).USER6_M!FIELDVALTRIM)
+					F.Intrinsic.Control.Else
+						V.Global.sMaterialSpec.Set(V.DataTable.ITEMS(V.Local.iCount).LOT_M!FIELDVALTRIM)
+					F.Intrinsic.Control.EndIf
+					v.global.sProcessSpec.Set("")
+					v.global.sSupplierProcessor.Set(V.DataTable.ITEMS(V.Local.iCount).USER2_MO!FIELDVALTRIM)
+					v.global.sDocument.Set(V.DataTable.ITEMS(V.Local.iCount).USER3_MO!FIELDVALTRIM)
+				F.Intrinsic.Control.Else
+					v.Global.sMaterialSpec.Set(V.DataTable.ITEMS(V.Local.iCount).LOT_M!FIELDVALTRIM)
+					v.global.sProcessSpec.Set("")
+					v.global.sSupplierProcessor.Set("")
+					v.global.sDocument.Set("")
+				F.Intrinsic.Control.EndIf
+			F.Intrinsic.Control.Elseif(v.Global.sSource,"=","M")
+				f.Intrinsic.Control.If(v.DataTable.ITEMS(V.Local.iCount).LOT_M!FIELDVALTRIM,>,"")
+					v.Global.sMaterialSpec.Set(V.DataTable.ITEMS(V.Local.iCount).LOT_M!FIELDVALTRIM)
+				F.Intrinsic.Control.Else
+					V.Global.sMaterialSpec.Set(V.DataTable.ITEMS(V.Local.iCount).USER_FIELD_1!FIELDVALTRIM)
+				F.Intrinsic.Control.EndIf
+				v.global.sProcessSpec.Set("")
+				v.global.sSupplierProcessor.Set("")
+				v.global.sDocument.Set("")
+			f.Intrinsic.Control.Else
+				f.Intrinsic.Control.If(v.DataTable.ITEMS(V.Local.iCount).LOT_M!FIELDVALTRIM,>,"")
+					v.Global.sMaterialSpec.Set(V.DataTable.ITEMS(V.Local.iCount).LOT_M!FIELDVALTRIM)
+				F.Intrinsic.Control.Else
+					V.Global.sMaterialSpec.Set(V.DataTable.ITEMS(V.Local.iCount).USER_FIELD_1!FIELDVALTRIM)
+				F.Intrinsic.Control.EndIf
+				v.global.sProcessSpec.Set("")
+				v.global.sSupplierProcessor.Set(V.DataTable.ITEMS(V.Local.iCount).USER2_MO!FIELDVALTRIM)
+				v.global.sDocument.Set("")
+			Function.Intrinsic.Control.EndIf
+			f.Intrinsic.Math.add(v.Local.iRow,1,v.Local.iRow)
+			f.Data.DataTable.AddRowByMap("CERTS",V.Global.sMap,v.Local.iRow,V.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,v.Global.sMaterialSpec,v.global.sProcessSpec,v.global.sSupplierProcessor,v.global.sDocument,v.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+	v.Global.sMaterialSpec.Set("")
+	'this is checking the same row to see if we have values in the ie.userX fields.
+	F.Intrinsic.Control.If(V.DataTable.ITEMS(V.Local.iCOUNT).USERS!FIELDVALTRIM,">","")
+		f.Intrinsic.Control.CallSub(user_fields,"COUNT",v.Local.iCount,"ROW",V.Local.iRow,"CHILD",V.Local.iChild)
+	F.Intrinsic.Control.EndIf
+	'should we check the lot here, flag bprocessed, and get it's children all the way down before moving to the next loop?
+	
+F.Intrinsic.Control.Next(V.Local.iCount)
+
+f.Intrinsic.Debug.SetLA("Tier 1 lines and user fields addressed, moving to tier2")
+f.Intrinsic.Control.CallSub(loop_certs)
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Sub_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: Project",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.Debug.SetLA(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.LoadBOM.End
+
+Program.Sub.LoadBI.Start
+V.Local.iBIRptID.Declare(Long,114)
+V.Local.iBIRunID.Declare(Long)
+V.Local.iBILogID.Declare(Long)
+
+f.Intrinsic.Debug.SetLA("opening the report")
+'Get BI Run ID
+F.Global.BI.GetRunID(V.Local.iBIRunID)
+'Starting BI Logging
+F.Global.BI.StartLogging(V.Local.iBIRunID,V.Local.iBIRptID,-1,"",V.Local.iBILogID)
+
+V.Local.sParams.Declare(String)
+V.Local.sValues.Declare(String)
+
+V.Local.sParams.Set("Terminal*!*REPORTID")
+F.Intrinsic.String.Concat(V.Caller.Terminal,"*!*",V.Local.iBIRptID,V.local.sValues)
+
+F.Intrinsic.String.Split(V.Local.sParams,"*!*",V.Local.sParams)
+F.Intrinsic.String.Split(V.Local.sValues,"*!*",V.Local.sValues)
+
+F.Global.BI.PrintReport(V.Local.iBIRptID,0,V.Local.sParams,V.Local.sValues,"",True)
+Program.Sub.LoadBI.End
+
+Program.Sub.USER_FIELDS.Start
+'added to speed up the report.  we're only going here if we have data in user fields
+v.Local.iRow.Declare(Long)
+v.Local.iChild.Declare(Float)
+v.Local.bProcessed.Declare(Boolean)
+v.Local.sLog.Declare(String)
+v.Local.iCount.Declare(Long)
+
+v.Local.iCount.Set(v.Args.COUNT)
+V.Local.iRow.Set(V.Args.Row)
+v.Local.iChild.Set(v.Args.Child)
+v.Local.bProcessed.Set(True)
+
+f.Intrinsic.String.Build("Key1 {0} key2 {1} had user values from inventory extra table, loop through fields 1 through 10",v.Local.iRow,v.Local.iChild,v.Local.sLog)
+f.Intrinsic.Debug.SetLA(v.Local.sLog)
+	'inv_extra fields
+	f.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER1!FIELDVALTRIM,">","")
+		f.Intrinsic.math.Add(v.Local.iChild,.001,v.Local.iChild)
+		f.Data.DataTable.addrowbymap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,V.Global.sMaterialSpec,v.DataTable.ITEMS(v.Local.iCount).USER1!FIELDVALTRIM,"Prompton Tool, Inc.","",V.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER2!FIELDVALTRIM,">","")
+		f.Intrinsic.math.Add(v.Local.iChild,.001,v.Local.iChild)
+		f.Data.DataTable.addrowbymap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,V.Global.sMaterialSpec,v.DataTable.ITEMS(v.Local.iCount).USER2!FIELDVALTRIM,"Prompton Tool, Inc.","",V.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER3!FIELDVALTRIM,">","")
+		f.Intrinsic.math.Add(v.Local.iChild,.001,v.Local.iChild)
+		f.Data.DataTable.addrowbymap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,V.Global.sMaterialSpec,v.DataTable.ITEMS(v.Local.iCount).USER3!FIELDVALTRIM,"Prompton Tool, Inc.","",V.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER4!FIELDVALTRIM,">","")
+		f.Intrinsic.math.Add(v.Local.iChild,.001,v.Local.iChild)
+		f.Data.DataTable.addrowbymap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,V.Global.sMaterialSpec,v.DataTable.ITEMS(v.Local.iCount).USER4!FIELDVALTRIM,"Prompton Tool, Inc.","",V.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER5!FIELDVALTRIM,">","")
+		f.Intrinsic.math.Add(v.Local.iChild,.001,v.Local.iChild)
+		f.Data.DataTable.addrowbymap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,V.Global.sMaterialSpec,v.DataTable.ITEMS(v.Local.iCount).USER5!FIELDVALTRIM,"Prompton Tool, Inc.","",V.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER6!FIELDVALTRIM,">","")
+		f.Intrinsic.math.Add(v.Local.iChild,.001,v.Local.iChild)
+		f.Data.DataTable.addrowbymap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,V.Global.sMaterialSpec,v.DataTable.ITEMS(v.Local.iCount).USER6!FIELDVALTRIM,"Prompton Tool, Inc.","",V.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER7!FIELDVALTRIM,">","")
+		f.Intrinsic.math.Add(v.Local.iChild,.001,v.Local.iChild)
+		f.Data.DataTable.addrowbymap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,V.Global.sMaterialSpec,v.DataTable.ITEMS(v.Local.iCount).USER7!FIELDVALTRIM,"Prompton Tool, Inc.","",V.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER8!FIELDVALTRIM,">","")
+		f.Intrinsic.math.Add(v.Local.iChild,.001,v.Local.iChild)
+		f.Data.DataTable.addrowbymap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,V.Global.sMaterialSpec,v.DataTable.ITEMS(v.Local.iCount).USER8!FIELDVALTRIM,"Prompton Tool, Inc.","",V.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER9!FIELDVALTRIM,">","")
+		f.Intrinsic.math.Add(v.Local.iChild,.001,v.Local.iChild)
+		f.Data.DataTable.addrowbymap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,V.Global.sMaterialSpec,v.DataTable.ITEMS(v.Local.iCount).USER9!FIELDVALTRIM,"Prompton Tool, Inc.","",V.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.If(v.DataTable.ITEMS(v.Local.iCount).USER10!FIELDVALTRIM,">","")
+		f.Intrinsic.math.Add(v.Local.iChild,.001,v.Local.iChild)
+		f.Data.DataTable.addrowbymap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,V.Global.sMaterialSpec,v.DataTable.ITEMS(v.Local.iRow).USER10!FIELDVALTRIM,"Prompton Tool, Inc.","",V.Local.bProcessed,V.Global.sLotKey)
+	F.Intrinsic.Control.EndIf
+
+Program.Sub.USER_FIELDS.End
+
+Program.Sub.certs_map.Start
+f.Data.DataTable.Create("CERTS",True)
+f.Data.DataTable.AddColumn("CERTS","KEY1","LONG")
+F.Data.DataTable.AddColumn("CERTS","KEY2","STRING")
+F.Data.DataTable.AddColumn("CERTS","CODE_SOURCE","STRING")
+f.Data.DataTable.AddColumn("CERTS","LMO","STRING")
+f.Data.DataTable.AddColumn("CERTS","PART","STRING")
+F.Data.DataTable.AddColumn("CERTS","REV","STRING")
+F.Data.DataTable.AddColumn("CERTS","LOT_M","STRING")
+F.Data.DataTable.AddColumn("CERTS","PROC_SPEC","STRING")
+F.Data.DataTable.AddColumn("CERTS","SUP_PROC","STRING")
+f.Data.DataTable.AddColumn("CERTS","DOCUMENT","STRING")
+F.Data.DataTable.AddColumn("CERTS","PROCESSED","BOOLEAN",False)
+f.Data.DataTable.AddColumn("CERTS","LOT","STRING")
+
+V.Global.sMap.Set("KEY1*!*KEY2*!*CODE_SOURCE*!*LMO*!*PART*!*REV*!*LOT_M*!*PROC_SPEC*!*SUP_PROC*!*DOCUMENT*!*PROCESSED*!*LOT")
+
+Program.Sub.certs_map.End
+
+Program.Sub.loop_certs.Start
+v.Local.iCount.Declare(Long)
+v.Local.iRow.Declare(Long)
+v.Local.iParent.Declare(Long)
+v.Local.iChild.Declare(Float)
+v.Local.bProcessed.Declare(Boolean,True)
+v.Local.sJob.Declare(String)
+v.Local.sSuffix.Declare(String)
+v.Local.bExists.Declare(Boolean)
+v.Local.sTemp.Declare(String)
+v.Local.sSql.Declare(String)
+v.Local.sRet.Declare(String)
+
+f.Intrinsic.Control.For(v.Local.iCount,0,v.DataTable.CERTS.RowCount--,1)
+	f.Intrinsic.Control.If(v.DataTable.CERTS(v.Local.iCount).PROCESSED!FIELDVAL,"=",False)
+		F.Data.DataTable.SetValue("CERTS",V.Local.iCount,"PROCESSED",v.Local.bProcessed)
+		f.Intrinsic.Control.If(v.DataTable.CERTS(v.Local.iCount).LMO!FIELDVALTRIM,"=","M")
+			f.Intrinsic.Control.AndIf(v.DataTable.CERTS(v.Local.iCount).CODE_SOURCE!FIELDVALTRIM,"=","M")
+				v.Local.sJob.Set(v.DataTable.CERTS(v.Local.iCount).LOT_M!FIELDVALTRIM)
+				F.Intrinsic.String.IsInString(V.Local.sJob,"-",False,V.Local.bExists)
+				f.Intrinsic.Debug.SetLA("checking this cert for the lot number")
+				F.Intrinsic.Control.If(V.Local.bExists,"=",True)
+					F.Intrinsic.String.Split(v.Local.sJob,"-",v.Local.sTemp)
+					v.Local.sJob.Set(v.Local.sTemp(0))
+					v.Local.sSuffix.Set(v.Local.sTemp(1))
+					f.Intrinsic.String.Build("select distinct job from v_job_header where job = '{0}'",v.Local.sJob,v.Local.sSql)
+					f.ODBC.Connection!Con.executeandreturn(v.Local.ssql,v.Local.sRet)
+					v.Local.sJob.Set(v.Local.sRet)
+				f.Intrinsic.Control.Else
+					f.Intrinsic.String.Build("select distinct job from v_job_header where job = '{0}'",v.Local.sJob,v.Local.sSql)
+					f.ODBC.Connection!Con.executeandreturn(v.Local.ssql,v.Local.sRet)
+					f.Intrinsic.Control.If(v.Local.sRet,<>,v.Local.sJob)
+						'clear out job and suffix.  If '-' doesn't exist in the lot, we don't want to move on to the load_child subroutine.
+						v.Local.sJob.Set("")
+						v.Local.sSuffix.Set("")
+					f.Intrinsic.Control.EndIf
+				f.Intrinsic.Control.EndIf
+				
+				'there's a valid work order to search.  Set the ROW and CHILD values and move to that sub
+				f.Intrinsic.Control.If(v.Local.sJob,">","")
+					V.Local.iParent.Set(V.DataTable.CERTS(V.Local.iCount).KEY1!FIELDVAL)
+					V.Local.iChild.Set(V.DataTable.CERTS(V.Local.iCount).KEY2!FIELDVAL)
+					'F.Intrinsic.math.Add(v.Local.iChild,.1,v.Local.iChild)
+					f.Intrinsic.Control.CallSub(load_child,"sJOB",V.Local.sJob,"sSUFFIX",V.Local.sSuffix,"ROW",V.Local.iParent,"CHILD",V.Local.iChild)
+				f.Intrinsic.Control.EndIf
+		f.Intrinsic.Control.EndIf
+	f.Intrinsic.Control.EndIf
+f.Intrinsic.Control.Next(v.Local.iCount)
+
+
+Program.Sub.loop_certs.End
+
+Program.Sub.load_child.Start
+V.Local.sSQL.Declare(String)
+V.Local.sSQL1.Declare(String)
+V.Local.sRet.Declare(String)
+V.Local.sPath.Declare(String)
+V.Local.i.Declare(Long)
+v.Local.iCount.Declare(Long)
+v.Local.sQuery.Declare(String)
+v.Local.sRow.Declare(String)
+V.Local.sJob.Declare(String)
+v.Local.sSuffix.Declare(String)
+v.Local.bProcessed.Declare(Boolean)
+v.Local.iRec.Declare(Long)
+v.Local.iRow.Declare(Long)
+V.Local.iChild.Declare(Float)
+v.Local.sLot.Declare(String)
+v.Local.sUser.Declare(String)
+v.Local.sTemp.Declare(String)
+v.Local.fADD.Declare(Float)
+v.Local.sSeq.Declare(String)
+
+V.Local.iChild.Set(V.Args.CHILD)
+v.Local.iRow.Set(v.Args.ROW)
+
+f.Intrinsic.Control.If(v.Local.iChild.Long,=,0)
+	f.Intrinsic.Math.Add(v.Local.iChild,1,v.Local.iChild)
+	v.Local.fADD.Set(1)
+f.Intrinsic.Control.else
+	f.Intrinsic.Control.if(v.Local.iChild.Long,=,v.Local.iChild)
+		v.Local.fADD.Set(.1)
+	f.Intrinsic.Control.Else
+		v.Local.fADD.Set(.01)
+	f.Intrinsic.Control.EndIf
+f.Intrinsic.Control.EndIf
+
+'write the base query as a variable so we can use it again
+v.Local.sQuery.Set("select distinct left(ih.part,17) PartNum, right(ih.part,3) PartRev, jo.lmo, im.code_source, ih.sequence, ih.lot Lot_M, it.user_FIELD_1, it.user_FIELD_2 User2_MO, it.user_FIELD_3 User3_MO, if(jo.lmo='M',it.user_FIELD_6,'') User6_M, if(jo.lmo='O',it.user_FIELD_6,'') User6_O, if(jo.lmo='O',it.user_FIELD_8,'') User8_O, if(jo.lmo='O',it.user_FIELD_9,'') User9_O, ie.user1, ie.user2, ie.user3, ie.user4, ie.user5, ie.user6, ie.user7, ie.user8, ie.user9, ie.user10 from v_item_history ih left outer join v_inventory_mst2 im on ih.part=im.part and ih.location=im.location left outer join v_item_master it on ih.part = it.part and ih.location = it.location and ih.lot = it.lot left outer join inv_extra ie on left(ih.part,17)=ie.part and right(ih.part,3)=ie.rev and ih.location=ie.location left outer join v_job_operations jo on ih.job=jo.job and ih.suffix=jo.suffix and ih.sequence=jo.seq and jo.lmo in ('M','O') where ih.job='{0}' and ih.suffix='{1}' and seq<>'995000' ORDER BY LMO DESC")
+Function.Intrinsic.String.Build(V.Local.sQuery,V.Args.sJob,V.Args.sSuffix,V.Local.sSQL)
+
+'creating a list of part/lot/heat/user field data to sift through and organize
+F.Intrinsic.Control.If(V.DataTable.ITEMS.Exists,"=",True)
+	'if this datatable already exists, it means we are looping through this sub again, or again, or again....
+	f.Data.DataTable.Close("ITEMS")
+F.Intrinsic.Control.EndIf
+f.Data.DataTable.CreateFromSQL("ITEMS","CON",V.Local.sSQL,True)
+f.Data.DataTable.AddExpressionColumn("ITEMS","USERS","STRING","TRIM(USER1) + TRIM(USER2) + TRIM(USER3) + TRIM(USER4) + TRIM(USER5) + TRIM(USER6) + TRIM(USER7) + TRIM(USER8) + TRIM(USER9) + TRIM(USER10)")
+f.Data.DataTable.AddExpressionColumn("ITEMS","PURCH","STRING","USER2_MO + USER3_MO + USER6_O + USER8_O")
+f.Intrinsic.Debug.SetLA("expression column added to items table")
+
+'filter out what we don't want to see (duplicates with mismatched lot numbers)
+'f.Data.DataView.Create("ITEMS","V_ITEMS",22,"LMO = 'O' OR (LMO = 'M' AND LOT_M = USER_FIELD_1)","LMO DESC")
+'Function.Intrinsic.Debug.InvokeDebugger
+'Function.Intrinsic.Debug.Stop
+
+
+'loop through and write the data we want
+f.Intrinsic.Debug.SetLA("Looping through child records")
+F.Intrinsic.Control.For(V.Local.iCount,0,V.Datatable.ITEMS.RowCount--,1)
+		'set constants
+		v.global.sPart.Set(v.Datatable.ITEMS(v.Local.iCount).PartNum!FIELDVALTRIM)
+		v.global.sRev.Set(v.Datatable.ITEMS(v.Local.iCount).PartRev!FIELDVALTRIM)
+		v.global.sLMO.Set(V.Datatable.ITEMS(V.Local.iCount).LMO!FIELDVALTRIM)
+		v.global.sSource.Set(v.Datatable.ITEMS(v.Local.iCount).code_source!FIELDVALTRIM)
+		v.Local.sSeq.Set(v.DataTable.ITEMS(v.Local.iCount).SEQUENCE!FIELDVALTRIM)
+		'if LMO = O no further evaluation is needed, just write the record
+		F.Intrinsic.Control.If(v.global.sLMO,"=","O")
+			
+			f.Intrinsic.debug.SetLA("process child outside service")
+			
+			f.Intrinsic.String.Build("select distinct left(ih.part,17) PartNum, right(ih.part,3) PartRev, jo.lmo, im.code_source, ih.lot Lot_M, iu.usr_FIELD_1, iu.usr_FIELD_2 User2_MO, iu.usr_FIELD_3 User3_MO, if(jo.lmo='M',iu.usr_FIELD_6,'') User6_M, if(jo.lmo='O',iu.usr_FIELD_6,'') User6_O, if(jo.lmo='O',iu.usr_FIELD_8,'') User8_O, if(jo.lmo='O',iu.usr_FIELD_9,'') User9_O, ie.user1, ie.user2, ie.user3, ie.user4, ie.user5, ie.user6, ie.user7, ie.user8, ie.user9, ie.user10 from v_item_history ih left outer join v_inventory_mst2 im on ih.part=im.part and ih.location=im.location left outer join v_item_hist_usr iu on ih.part = iu.part and ih.location = iu.locn and ih.date_history = iu.key_date and ih.time_item_history = iu.key_time left outer join inv_extra ie on left(ih.part,17)=ie.part and right(ih.part,3)=ie.rev and ih.location=ie.location left outer join v_job_operations jo on ih.job=jo.job and ih.suffix=jo.suffix and ih.sequence=jo.seq and jo.lmo in ('O') where ih.part = '{0}{1}' and ih.job='{2}' and ih.suffix='{3}' and seq='{4}' ORDER BY LMO DESC",v.Global.sPart,v.Global.sRev,v.Args.sJOB,v.Args.sSuffix,V.Local.sSeq,v.Local.sSQL)
+			f.ODBC.Connection!Con.executeandreturn(v.Local.sSQL,v.Local.sRet)
+			f.Intrinsic.String.Split(v.Local.sRet,"#$#",v.Local.sRet)
+			f.Intrinsic.Control.For(v.Local.i,0,v.Local.sRet.UBound,1)		
+				f.Intrinsic.String.Split(v.Local.sRet(v.Local.i),"*!*",v.Local.sTemp)			
+				v.Global.sMaterialSpec.Set("")
+				f.Intrinsic.String.Build("{0} {1} {2}",v.Local.sTemp(9),v.Local.sTemp(10),v.Local.sTemp(11),v.global.sProcessSpec)
+				v.global.sSupplierProcessor.Set(v.Local.sTemp(6))
+				v.global.sDocument.Set(v.Local.sTemp(7))
+				F.Intrinsic.Math.Add(V.Local.iChild,v.Local.fADD,V.Local.iChild)
+				f.Data.DataTable.AddRowByMap("CERTS",V.Global.sMap,v.Local.iRow,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,v.Global.sMaterialSpec,v.global.sProcessSpec,v.global.sSupplierProcessor,v.global.sDocument,v.Local.bProcessed,V.Global.sLotKey)
+			f.Intrinsic.Control.Next(v.Local.i)
+		F.Intrinsic.Control.ElseIf(v.global.sLMO,"=","M")
+			f.Intrinsic.Debug.SetLA("process material")
+			F.Intrinsic.Control.If(V.DataTable.ITEMS(V.Local.iCount).CODE_SOURCE!FIELDVALTRIM,"=","M")
+				F.Intrinsic.Math.Add(V.Local.iChild,v.Local.fADD,V.Local.iChild)
+
+					f.Intrinsic.Control.If(v.DataTable.ITEMS(V.Local.iCount).LOT_M!FIELDVALTRIM,>,"")
+						v.Global.sMaterialSpec.Set(V.DataTable.ITEMS(V.Local.iCount).LOT_M!FIELDVALTRIM)
+					F.Intrinsic.Control.Else
+						V.Global.sMaterialSpec.Set(V.DataTable.ITEMS(V.Local.iCount).USER_FIELD_1!FIELDVALTRIM)
+					F.Intrinsic.Control.EndIf
+					v.global.sProcessSpec.Set("")
+					'v.global.sProcessSpec.Set(v.DataTable.ITEMS(v.Local.iCount).USERS!FIELDVALTRIM)
+					v.global.sSupplierProcessor.Set("")
+					v.global.sDocument.Set("")
+'				Function.Intrinsic.Control.EndIf
+
+
+'				f.Data.DataTable.AddRowByMap("CERTS",V.Global.sMap,v.Local.iRow,V.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,v.Global.sMaterialSpec,v.global.sProcessSpec,v.global.sSupplierProcessor,v.global.sDocument,v.Local.bProcessed,V.Global.sLotKey)
+			'if source code is P, then evaluate LOT_M versus USER_FIELD_1
+			F.Intrinsic.Control.ElseIF(V.DataTable.ITEMS(V.Local.iCount).CODE_SOURCE!FIELDVALTRIM,"=","P")			
+				v.Local.sLot.Set(v.DataTable.ITEMS(v.Local.iCount).LOT_M!FIELDVALTRIM)
+				f.Intrinsic.Control.If(v.Local.sLot.Left2,"=","MR")
+					F.Intrinsic.String.Replace(V.Local.sLot,"MR","",V.Local.sLot)
+				f.Intrinsic.Control.EndIf
+				v.Local.sUser.Set(v.DataTable.ITEMS(v.Local.iCount).USER_FIELD_1!FIELDVALTRIM)
+				F.Intrinsic.Control.IF(V.Local.sLot,"=",V.Local.sUser)
+					F.Intrinsic.Math.Add(V.Local.iChild,v.Local.fADD,V.Local.iChild)
+						v.Global.sMaterialSpec.Set(V.Datatable.ITEMS(V.Local.iCount).USER6_M!FIELDVALTRIM)
+						v.global.sProcessSpec.Set("")
+						v.global.sSupplierProcessor.Set(V.Datatable.ITEMS(V.Local.iCount).USER2_MO!FIELDVALTRIM)
+						v.global.sDocument.Set(V.Datatable.ITEMS(V.Local.iCount).USER3_MO!FIELDVALTRIM)
+				f.Intrinsic.Control.Else
+					f.Intrinsic.Math.Add(v.Local.iChild,v.Local.fADD,v.Local.iChild)
+						v.Global.sMaterialSpec.Set(V.Datatable.ITEMS(V.Local.iCount).USER6_M!FIELDVALTRIM)
+						v.global.sProcessSpec.Set("")
+						v.global.sSupplierProcessor.Set(V.Datatable.ITEMS(V.Local.iCount).USER2_MO!FIELDVALTRIM)
+						v.global.sDocument.Set(V.Datatable.ITEMS(V.Local.iCount).USER3_MO!FIELDVALTRIM)
+				F.Intrinsic.Control.EndIf
+			F.Intrinsic.Control.EndIf
+			f.Data.DataTable.AddRowByMap("CERTS",V.Global.sMap,v.ARGS.ROW,v.Local.iChild,v.global.sSource,v.global.sLMO,v.global.sPart,v.global.sRev,v.Global.sMaterialSpec,v.global.sProcessSpec,v.global.sSupplierProcessor,v.global.sDocument,V.Local.bProcessed,V.Global.sLotKey)
+		f.Intrinsic.Control.EndIf
+	
+		v.Global.sMaterialSpec.Set("")
+	F.Intrinsic.Control.If(V.Datatable.ITEMS(V.Local.iCOUNT).USERS!FIELDVALTRIM,">","")
+		f.Intrinsic.Control.CallSub(user_fields,"COUNT",v.Local.iCount,"ROW",V.Local.iRow,"CHILD",V.Local.iChild)
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Next(V.Local.iCount)
+
+Program.Sub.load_child.End
+
+
+
+Program.Sub.Comments.Start
+${$0$}$GCG_4801_MRPCOFC_Preproc.g2u$}$JWITHROW$}$10/13/2016 11:19:51 AM$}$False
+Program.Sub.Comments.End
